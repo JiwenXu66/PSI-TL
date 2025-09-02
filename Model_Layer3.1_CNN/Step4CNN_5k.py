@@ -14,7 +14,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder  
 from sklearn.metrics import accuracy_score, roc_curve, auc, precision_score, recall_score, f1_score 
 import matplotlib.pyplot as plt 
-#from rdkit import Chem
+#from rdkit import Che
 #from rdkit.Chem import AllChem
 import tensorflow as tf   
 from tensorflow.keras.layers import Layer, Embedding, LayerNormalization, MultiHeadAttention, Dense, GlobalAveragePooling1D
@@ -23,6 +23,8 @@ from tensorflow.keras.initializers import TruncatedNormal  #初始化器，避�
 from tensorflow.keras.models import Model, Sequential, load_model   
 import FunctionTwo
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from sklearn.model_selection import StratifiedKFold
+from keras.optimizers import Adam
 def process_lines(lines,i,folder): 
     file_index = i
     for line in lines:  
@@ -127,62 +129,62 @@ print("完成了数据的读取")
 #合并数据  
 X = np.concatenate((positive_data[:], negative_data[:]), axis=0)  
 y = np.concatenate((positive_labels[:], negative_labels[:]), axis=0)  
-#打乱数据
-#indices = np.random.permutation(len(X))
-#X = X[indices]
-#y = y[indices]
-#划分训练集和测试集  
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)  
-X_train = X_train.astype(np.float32) / 10
-y_train = y_train.astype(np.int32)
-X_test = X_test.astype(np.float32) / 10
-y_test = y_test.astype(np.int32)
-#将训练集拆分成训练集和验证集
-X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
-print("完成了数据的划分")
-#构建CNN模型  
-input_shape = (8, 58)
-model_CNN = Sequential([  
-    Conv1D(16, 1, activation='relu', input_shape=(8, 58),padding = 'SAME'),  # 1D卷积层，4个滤波器，每个滤波器大小为2
-    MaxPooling1D(2),  # 1D最大池化层，池化窗口大小为2
-    Conv1D(32, 1, activation='relu',padding = 'SAME'),  # 另一个1D卷积层，8个滤波器，每个滤波器大小为2
-    MaxPooling1D(2),  # 另一个1D最大池化层，池化窗口大小为2
-    Flatten(),  
-    Dense(64, activation='relu'),  
-    Dropout(0.5),  
-    Dense(1, activation='sigmoid')  # 假设是二分类问题  
-])  
-model_CNN.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])   
-#训练模型  
-model_CNN.fit(X_train, y_train, epochs=10, validation_split = 0.2)
-#预测模型
-y_pred = (model_CNN.predict(X_test) > 0.5).astype("int32").flatten()  # 将预测概率转换为二进制标签  
-y_pred_proba = model_CNN.predict(X_test).flatten()  # 获取预测概率  
-#模型评估
-CNN_loss, CNN_accuracy = model_CNN.evaluate(X_test, y_test, verbose=1)
-print (f"损失：{CNN_loss}" +"    "+f"准确率：{CNN_accuracy}")
-accuracy = accuracy_score(y_test, y_pred)  
-precision = precision_score(y_test, y_pred)  
-recall = recall_score(y_test, y_pred)  
-f1 = f1_score(y_test, y_pred)  
-print(f"Accuracy: {accuracy}")  
-print(f"Precision: {precision}")  
-print(f"Recall: {recall}")  
-print(f"F1 Score: {f1}")  
-#计算ROC曲线和AUC  
-fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)  
-roc_auc = auc(fpr, tpr)
-print(roc_auc)
-#绘制ROC曲线  
-plt.figure()  
-plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')  
-plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')  
-plt.xlim([0.0, 1.0])  
-plt.ylim([0.0, 1.05])  
-plt.xlabel('False Positive Rate')  
-plt.ylabel('True Positive Rate')  
-plt.title('Receiver Operating Characteristic')  
-plt.legend(loc="lower right")  
-plt.show()
-#模型保存
-model_CNN.save('ModelOfCNN.keras')
+
+# 数据归一化
+X = X.astype(np.float32) / 5
+y = y.astype(np.int32)
+ 
+# 5折交叉验证
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+fold_accuracies = []
+fold_precisions = []
+fold_recalls = []
+fold_f1s = []
+fold_aucs = []
+ 
+for train_index, val_index in skf.split(X, y):
+    X_train, X_val = X[train_index], X[val_index]
+    y_train, y_val = y[train_index], y[val_index]
+ 
+    # 构建CNN模型
+    model_CNN = Sequential([
+        Conv1D(4, 2, activation='relu', input_shape=(8, 58), padding='SAME'),
+        MaxPooling1D(2),
+        Conv1D(8, 2, activation='relu', padding='SAME'),
+        MaxPooling1D(2),
+        Flatten(),
+        Dense(64, activation='relu'),
+        Dropout(0.5),
+        Dense(1, activation='sigmoid')
+    ])
+ 
+    model_CNN.compile(optimizer=Adam(), loss='binary_crossentropy', metrics=['accuracy'])
+ 
+    # 训练模型
+    model_CNN.fit(X_train, y_train, epochs=10, batch_size=32, verbose=0)
+ 
+    # 预测验证集
+    y_val_pred = (model_CNN.predict(X_val) > 0.5).astype("int32").flatten()
+    y_val_pred_proba = model_CNN.predict(X_val).flatten()
+ 
+    # 计算指标
+    accuracy = accuracy_score(y_val, y_val_pred)
+    precision = precision_score(y_val, y_val_pred)
+    recall = recall_score(y_val, y_val_pred)
+    f1 = f1_score(y_val, y_val_pred)
+    fpr, tpr, thresholds = roc_curve(y_val, y_val_pred_proba)
+    roc_auc = auc(fpr, tpr)
+ 
+    # 保存结果
+    fold_accuracies.append(accuracy)
+    fold_precisions.append(precision)
+    fold_recalls.append(recall)
+    fold_f1s.append(f1)
+    fold_aucs.append(roc_auc)
+ 
+    print(f"Fold Accuracy: {accuracy}")
+    print(f"Fold Precision: {precision}")
+    print(f"Fold Recall: {recall}")
+    print(f"Fold F1 Score: {f1}")
+    print(f"Fold AUC: {roc_auc}")
+ 
