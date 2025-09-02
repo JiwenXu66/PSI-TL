@@ -10,7 +10,7 @@ import re
 import random #用来随机抽数
 import shutil#用来copy文件夹
 from sklearn.ensemble import RandomForestClassifier #用于分析分类问题
-from sklearn.model_selection import train_test_split  
+from sklearn.model_selection import train_test_split, KFold
 from sklearn.preprocessing import LabelEncoder  
 from sklearn.metrics import accuracy_score, roc_curve, auc, precision_score, recall_score, f1_score 
 import matplotlib.pyplot as plt 
@@ -23,6 +23,7 @@ from tensorflow.keras.initializers import TruncatedNormal  #初始化器，避�
 from tensorflow.keras.models import Model, Sequential, load_model   
 import FunctionTwo
 from concurrent.futures import ProcessPoolExecutor, as_completed
+from sklearn.model_selection import StratifiedKFold
 def process_lines(lines,i,folder): 
     file_index = i
     for line in lines:  
@@ -132,57 +133,68 @@ y = np.concatenate((positive_labels[:], negative_labels[:]), axis=0)
 #indices = np.random.permutation(len(X))
 #X = X[indices]
 #y = y[indices]
-#划分训练集和测试集  
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)  
-X_train = X_train.astype(np.float32) / 10
-y_train = y_train.astype(np.int32)
-X_test = X_test.astype(np.float32) / 10
-y_test = y_test.astype(np.int32)
-#将训练集拆分成训练集和验证集
-X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
-print("完成了数据的划分")
-#构建DNN模型  
-#input_shape = (8, 58)
-model_DNN = Sequential([   
-    Flatten(input_shape=(8,58)),    #
-   # Dense(128, activation='relu'),  # 输入层
-   # Dense(256, activation='relu'),  # 第二个隐藏层
-   # Dropout(0.2),
-    Dense(128, activation='relu'),  # 第三个隐藏层
-    Dropout(0.2),
-    Dense(1, activation='sigmoid')  # 输出层，用于二分类
-])  
-model_DNN.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])   
-#训练模型  
-model_DNN.fit(X_train, y_train, epochs=10, validation_split = 0.2,batch_size=128)
-#预测模型
-y_pred = (model_DNN.predict(X_test) > 0.5).astype("int32").flatten()  # 将预测概率转换为二进制标签  
-y_pred_proba = model_DNN.predict(X_test).flatten()  # 获取预测概率  
-#模型评估
-DNN_loss, DNN_accuracy = model_DNN.evaluate(X_test, y_test, verbose=1)
-print (f"损失：{DNN_loss}" +"    "+f"准确率：{DNN_accuracy}")
-accuracy = accuracy_score(y_test, y_pred)  
-precision = precision_score(y_test, y_pred)  
-recall = recall_score(y_test, y_pred)  
-f1 = f1_score(y_test, y_pred)  
-print(f"Accuracy: {accuracy}")  
-print(f"Precision: {precision}")  
-print(f"Recall: {recall}")  
-print(f"F1 Score: {f1}")  
-#计算ROC曲线和AUC  
-fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)  
-roc_auc = auc(fpr, tpr)
-print(roc_auc)
-#绘制ROC曲线  
-plt.figure()  
-plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')  
-plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')  
-plt.xlim([0.0, 1.0])  
-plt.ylim([0.0, 1.05])  
-plt.xlabel('False Positive Rate')  
-plt.ylabel('True Positive Rate')  
-plt.title('Receiver Operating Characteristic')  
-plt.legend(loc="lower right")  
-plt.show()
-#模型保存
-model_DNN.save('ModelOfDNN.keras')
+# 数据类型转换和缩放
+X = X.astype(np.float32) / 5
+y = y.astype(np.int32)
+ 
+# 定义KFold交叉验证
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+ 
+# 定义DNN模型构建函数
+def create_model():
+    model = Sequential([
+        Flatten(input_shape=(8, 58)),
+        Dense(128, activation='relu'),
+        Dense(64, activation='relu'),
+        Dropout(0.2),
+        Dense(1, activation='sigmoid')
+    ])
+    model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+    return model
+ 
+# 存储每次交叉验证的结果
+accuracies, precisions, recalls, f1s, aucs = [], [], [], [], []
+ 
+# 交叉验证过程
+for train_index, val_index in kf.split(X):
+    X_train, X_val = X[train_index], X[val_index]
+    y_train, y_val = y[train_index], y[val_index]
+ 
+    model = create_model()
+    model.fit(X_train, y_train, epochs=10, batch_size=32, verbose=0)  # verbose=0以减少输出
+ 
+    # 预测
+    y_val_pred = (model.predict(X_val) > 0.5).astype("int32").flatten()
+    y_val_pred_proba = model.predict(X_val).flatten()
+ 
+    # 计算性能指标
+    accuracy = accuracy_score(y_val, y_val_pred)
+    precision = precision_score(y_val, y_val_pred)
+    recall = recall_score(y_val, y_val_pred)
+    f1 = f1_score(y_val, y_val_pred)
+    fpr, tpr, thresholds = roc_curve(y_val, y_val_pred_proba)
+    roc_auc = auc(fpr, tpr)
+ 
+    # 存储结果
+    accuracies.append(accuracy)
+    precisions.append(precision)
+    recalls.append(recall)
+    f1s.append(f1)
+    aucs.append(roc_auc)
+ 
+# 输出每次交叉验证的结果
+for i in range(5):
+    print(f"Fold {i+1}:")
+    print(f"  Accuracy: {accuracies[i]}")
+    print(f"  Precision: {precisions[i]}")
+    print(f"  Recall: {recalls[i]}")
+    print(f"  F1 Score: {f1s[i]}")
+    print(f"  AUC: {aucs[i]}")
+    print()
+ 
+# 如果需要，也可以输出平均性能指标
+print(f"Average Accuracy: {np.mean(accuracies)}")
+print(f"Average Precision: {np.mean(precisions)}")
+print(f"Average Recall: {np.mean(recalls)}")
+print(f"Average F1 Score: {np.mean(f1s)}")
+print(f"Average AUC: {np.mean(aucs)}")
