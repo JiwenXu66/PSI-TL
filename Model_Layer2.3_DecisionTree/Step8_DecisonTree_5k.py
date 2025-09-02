@@ -8,7 +8,7 @@ import numpy as np
 import re
 import random #用来随机抽数
 import shutil#用来copy文件夹
-
+from sklearn.model_selection import StratifiedKFold
 from sklearn.model_selection import train_test_split  
 from sklearn.preprocessing import LabelEncoder 
 from sklearn.tree import DecisionTreeClassifier
@@ -56,47 +56,75 @@ data = np.loadtxt('RF_ProteinCharacterFile.txt',delimiter = ',',dtype = float)
 data1 = data[:,0:20]
 data2 = data[:,420:564]
 data3 = data[:,708:]
-#data1 = data[:,0:420]
-#data2 = data[:,420:708]
-#data3 = data[:,708:]
 print(data1.shape,data2.shape,data3.shape)
 data = np.concatenate((data1, data2,data3), axis=1)
 X,y = np.split(data,(164,),axis=1)
 print(X.shape,y.shape)
 y = y.ravel()
 
-#划分测试，验证，训练集
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42) 
-X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42) 
-#搭建逻辑回归模型
-model_DT = DecisionTreeClassifier()
-#训练模型
-model_DT.fit(X_train, y_train) 
-#保存模型
-dump(model_DT, 'ModelOfmodel_DT.joblib')
-#使用验证集
-score_val = model_DT.score(X_val, y_val)  
-score_test = model_DT.score(X_test, y_test)
-print(f"验证集得分：{score_val}" + "   " +f"测试集得分：{score_test}")
-#验证测试集的accurancy
-y_pred = model_DT.predict(X_test)  
-y_pred_proba = model_DT.predict_proba(X_test)[:, 1]
-accuracy = accuracy_score(y_test, y_pred)  
-print(f"Accuracy: {accuracy}")  
-#计算精确率（需要指定正类的标签，这里假设正类标签为1）  
-precision = precision_score(y_test, y_pred, pos_label=1)  
-print(f'Precision: {precision}')  
-#计算召回率（需要指定正类的标签，这里假设正类标签为1）  
-recall = recall_score(y_test, y_pred, pos_label=1)  
-print(f'Recall: {recall}')   
-#计算F1分数（需要指定正类的标签，这里假设正类标签为1）  
-f1 = f1_score(y_test, y_pred, pos_label=1)  
-print(f'F1 Score: {f1}')  
 
-#计算ROC曲线和AUC  
-fpr, tpr, thresholds = roc_curve(y_test, y_pred_proba)  
-roc_auc = auc(fpr, tpr)  
-print(f'AUC: {roc_auc}')  
+# 设置决策树模型
+model_DT = DecisionTreeClassifier(random_state=42)
+ 
+# 使用StratifiedKFold进行5倍交叉验证
+skf = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+ 
+# 存储每次验证的结果
+accuracies = []
+precisions = []
+recalls = []
+f1_scores = []
+aucs = []
+ 
+for train_index, val_index in skf.split(X, y):
+    X_train_fold, X_val_fold = X[train_index], X[val_index]
+    y_train_fold, y_val_fold = y[train_index], y[val_index]
+    
+    # 训练模型
+    model_DT.fit(X_train_fold, y_train_fold)
+    
+    # 预测验证集
+    y_val_pred = model_DT.predict(X_val_fold)
+    # 注意：决策树的predict_proba可能不是真正的概率，但在某些情况下可以用作ROC曲线的输入
+    y_val_pred_proba = model_DT.predict_proba(X_val_fold)[:, 1]
+    
+    # 计算准确率
+    accuracy = accuracy_score(y_val_fold, y_val_pred)
+    accuracies.append(accuracy)
+    
+    # 计算精确率
+    precision = precision_score(y_val_fold, y_val_pred, pos_label=1)
+    precisions.append(precision)
+    
+    # 计算召回率
+    recall = recall_score(y_val_fold, y_val_pred, pos_label=1)
+    recalls.append(recall)
+    
+    # 计算F1分数
+    f1 = f1_score(y_val_fold, y_val_pred, pos_label=1)
+    f1_scores.append(f1)
+    
+    # 计算ROC曲线和AUC（注意：对于决策树，AUC可能不是很有意义，因为决策树不是概率模型）
+    fpr, tpr, thresholds = roc_curve(y_val_fold, y_val_pred_proba)
+    roc_auc = auc(fpr, tpr)
+    aucs.append(roc_auc)
+ 
+# 输出每一次验证的结果
+for i in range(5):
+    print(f"Fold {i+1} - Accuracy: {accuracies[i]}, Precision: {precisions[i]}, Recall: {recalls[i]}, F1 Score: {f1_scores[i]}, AUC: {aucs[i]}")
+ 
+# 计算所有验证结果的平均值
+mean_accuracy = np.mean(accuracies)
+mean_precision = np.mean(precisions)
+mean_recall = np.mean(recalls)
+mean_f1 = np.mean(f1_scores)
+mean_auc = np.mean(aucs)
+ 
+print(f"Mean Accuracy: {mean_accuracy}")
+print(f"Mean Precision: {mean_precision}")
+print(f"Mean Recall: {mean_recall}")
+print(f"Mean F1 Score: {mean_f1}")
+print(f"Mean AUC: {mean_auc}")
 
 #import matplotlib.pyplot as plt    
 #plt.figure()  
