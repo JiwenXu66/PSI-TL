@@ -24,6 +24,8 @@ import FunctionTwo
 import FunctionZero
 from tensorflow.keras.utils import register_keras_serializable 
 import matplotlib.pyplot as plt
+from sklearn.model_selection import KFold
+
 ########Transformer框架的应用
 class PositionalEncoding(Layer):   #为输入序列添加位置编码，定义了一个层layer，可以和keras中其他层一样使用的类，这个类是Layer的子类
     def __init__(self, position_size, d_model, **kwargs):  #初始化方法，三个参数：位置编码长度，模型的特征维度，任意数量的关键字参数
@@ -174,19 +176,7 @@ def read_files(filename,label):
     return data,labels
 
 
-num_layers = 2  #编码器堆叠层数
-d_model = 128    #数据扩增后的维度,可以自己设定
-num_heads = 6    #多头自注意力的头数
-dff = 1024       #前反馈神经网络中的维数
-input_vocab_size = 20  #输入词汇的大小
-maximum_position_encoding = 8  #输入词汇的最大位置编码啊
-  
-# 创建transformer_encoder框架  
-transformer_encoder = TransformerEncoder(num_layers, d_model, num_heads, dff, input_vocab_size, maximum_position_encoding) 
-# 在transformer_encoder的基础上构建二分类模型  
-model_Transformer = TransformerEncoderForBinaryClassification(transformer_encoder)
-# 编译二分类模型  
-model_Transformer.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])   # 因为是二分类问题 
+
 # 读取数据  
 positive_data, positive_labels = read_files('PositiveResult2_shaixuan.txt', '1')  
 negative_data, negative_labels = read_files('NegativeResult2_shaixuan.txt', '0')  
@@ -194,55 +184,68 @@ negative_data, negative_labels = read_files('NegativeResult2_shaixuan.txt', '0')
 inputs = tf.concat((positive_data[:], negative_data[:]), axis=0)  #这时候有13000多个数据
 labels = tf.concat((positive_labels[:], negative_labels[:]), axis=0)
 #print(inputs.shape)
-# 使用索引打乱数据  
-indices = tf.random.shuffle(tf.range(tf.shape(inputs)[0]))
-shuffled_inputs = tf.gather(inputs, indices)   
-shuffled_labels = tf.gather(labels, indices) 
-# 划分训练集和测试集  
-train_split = tf.constant(0.8, dtype=tf.float32)
-num_elements = tf.shape(shuffled_inputs)[0]  
-num_train = tf.cast(tf.math.round(tf.cast(num_elements, tf.float32) * train_split), tf.int32)  
-num_test = num_elements - num_train
-train_inputs, test_inputs = tf.split(shuffled_inputs, [num_train, num_test], axis=0)  
-train_labels, test_labels = tf.split(shuffled_labels, [num_train, num_test], axis=0)
-# 训练模型  
-mask = None
-model_Transformer.fit(train_inputs, train_labels, epochs=10, batch_size=64, validation_split=0.2)  #batch_size adam分析中，每次迭代的样本量，32的倍数
-# 保存模型
-model_Transformer.save('ModelOfTransformer.keras')
-#评估模型
-#y_pred = (model.predict(test_inputs) > 0.5).astype("int32").flatten()
-Trans_loss, Trans_accuracy = model_Transformer.evaluate(test_inputs, test_labels, verbose=1)
-print(f"损失：{Trans_loss}" +"  "+ f"准确：{Trans_accuracy}")
 
-# 预测概率值，而不是类别标签  
-y_probs = model_Transformer.predict(test_inputs).ravel() 
-# 将概率值转换为类别标签（阈值为0.5）  
-y_pred = (y_probs > 0.5).astype("int32")  
-# 计算并打印F1分数、召回率、精确率  
-f1 = f1_score(test_labels, y_pred)  
-recall = recall_score(test_labels, y_pred)  
-precision = precision_score(test_labels, y_pred)  
-accuracy = accuracy_score(test_labels, y_pred)
-# 计算ROC曲线  
-fpr, tpr, thresholds = roc_curve(test_labels, y_probs)  
-roc_auc = auc(fpr, tpr)  
+# 5倍交叉验证
+kf = KFold(n_splits=5, shuffle=True, random_state=42)
+results = []
+ 
+for fold, (train_index, val_index) in enumerate(kf.split(inputs)):
+    print(f"Training for fold {fold + 1}")
+    # 将 NumPy 索引数组转换为 TensorFlow 张量
+    train_index_tensor = tf.convert_to_tensor(train_index, dtype=tf.int32)
+    val_index_tensor = tf.convert_to_tensor(val_index, dtype=tf.int32)
+    # 使用 tf.gather 根据索引收集数据
+    train_inputs = tf.gather(inputs, train_index_tensor)
+    val_inputs = tf.gather(inputs, val_index_tensor)
+    train_labels = tf.gather(labels, train_index_tensor)
+    val_labels = tf.gather(labels, val_index_tensor)
+    #参数设计
+    num_layers = 2  #编码器堆叠层数
+    d_model = 128    #数据扩增后的维度,可以自己设定
+    num_heads = 6    #多头自注意力的头数
+    dff = 1024       #前反馈神经网络中的维数
+    input_vocab_size = 20  #输入词汇的大小
+    maximum_position_encoding = 8  #输入词汇的最大位置编码啊
+    # 创建transformer_encoder框架  
+    transformer_encoder = TransformerEncoder(num_layers, d_model, num_heads, dff, input_vocab_size, maximum_position_encoding) 
+    # 在transformer_encoder的基础上构建二分类模型  
+    model_Transformer = TransformerEncoderForBinaryClassification(transformer_encoder)
+    # 编译二分类模型  
+    model_Transformer.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])   # 因为是二分类问题 
+    # 训练模型
+    mask = None
+    model_Transformer.fit(train_inputs, train_labels, epochs=10, batch_size=64, validation_split=0.2)  #batch_size adam分析中，每次迭代的样本量，32的倍数
+    
+    # 评估模型
+    val_loss, val_accuracy = model_Transformer.evaluate(val_inputs, val_labels, verbose=0)
+    y_probs = model_Transformer.predict(val_inputs).ravel()
+    y_pred = (y_probs > 0.5).astype("int32")
+    
+    f1 = f1_score(val_labels, y_pred)
+    recall = recall_score(val_labels, y_pred)
+    precision = precision_score(val_labels, y_pred)
+    accuracy = accuracy_score(val_labels, y_pred)
+    fpr, tpr, thresholds = roc_curve(val_labels, y_probs)
+    roc_auc = auc(fpr, tpr)
+    
+    results.append({
+        'fold': fold + 1,
+        'accuracy': accuracy,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'auc': roc_auc
+    })
+    
+    print(f"Fold {fold + 1} - Accuracy: {accuracy}, Precision: {precision}, Recall: {recall}, F1: {f1}, AUC: {roc_auc}")
+ 
+# 打印所有结果
+for result in results:
+    print(f"Fold {result['fold']} - Accuracy: {result['accuracy']}, Precision: {result['precision']}, Recall: {result['recall']}, F1: {result['f1']}, AUC: {result['auc']}")
 
-print(f"F1分数：{f1}")  
-print(f"召回率（Recall）：{recall}")  
-print(f"精确率（Precision）：{precision}")  
-print(f"准确率：{accuracy}")
-print(f"ROC：{roc_auc}")
 
-# 但通常我们会绘制ROC曲线图  
-#plt.figure()  
-#plt.plot(fpr, tpr, color='darkorange', lw=2, label=f'ROC curve (area = {roc_auc:.2f})')  
-#plt.plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')  
-#plt.xlim([0.0, 1.0])  
-#plt.ylim([0.0, 1.05])  
-#plt.xlabel('False Positive Rate')  
-#plt.ylabel('True Positive Rate')  
-#plt.title('Receiver Operating Characteristic (ROC) Curve')  
-#plt.legend(loc="lower right")  
-#plt.show()
-print("模型训练结束")
+
+
+
+
+
